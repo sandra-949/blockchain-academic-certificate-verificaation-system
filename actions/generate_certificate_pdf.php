@@ -2,14 +2,10 @@
 /**
  * actions/generate_certificate_pdf.php
  *
- * Generates a downloadable PDF certificate with embedded QR code
- * linking to the public verification page.
- *
- * USAGE: link to this file as:
- *   actions/generate_certificate_pdf.php?id=<certificateID>
- *
- * Place this file inside certverify/actions/
- * Place fpdf.php and qrcode.php inside certverify/lib/
+ * Generates a PDF certificate using:
+ * - The issuing institution's name (dynamic, from users table)
+ * - The institution's uploaded logo (if any)
+ * - The institution's primary and secondary color preferences
  */
 
 require_once '../config/db.php';
@@ -26,9 +22,13 @@ if ($certID <= 0) {
     die('Invalid certificate ID.');
 }
 
-// ---- FETCH CERTIFICATE ----
+// ---- FETCH CERTIFICATE + INSTITUTION BRANDING ----
 $stmt = $conn->prepare("
-    SELECT c.*, u.fullName AS issuedByName
+    SELECT c.*,
+           u.fullName       AS institutionName,
+           u.logoPath       AS logoPath,
+           u.primaryColor   AS primaryColor,
+           u.secondaryColor AS secondaryColor
     FROM certificates c
     JOIN users u ON c.issuedBy = u.userID
     WHERE c.certificateID = ?
@@ -42,159 +42,221 @@ if ($result->num_rows !== 1) {
 }
 $cert = $result->fetch_assoc();
 
-// Institution/employer users may only download their own institution's certs
+// Permission check
 if ($_SESSION['user_role'] === 'institution' && $cert['issuedBy'] != $_SESSION['user_id']) {
     die('You do not have permission to download this certificate.');
 }
 
-// ---- BUILD VERIFICATION URL ----
-// IMPORTANT: Update this to match your actual deployed domain
-$baseUrl = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? 'https://' : 'http://') . $_SERVER['HTTP_HOST'];
-$projectPath = '/certverify'; // change if your folder name differs
-$verifyUrl = $baseUrl . $projectPath . '/public_verify.php?hash=' . urlencode($cert['hashValue']);
+// ---- BRANDING SETTINGS ----
+$institutionName = strtoupper($cert['institutionName']);
+$logoPath        = $cert['logoPath'] ?? '';
+$primaryHex      = $cert['primaryColor']   ?: '#1a3a6c';
+$secondaryHex    = $cert['secondaryColor'] ?: '#e8a020';
 
-// ---- GENERATE QR CODE MATRIX ----
-$qr = QRCode::getMinimumQRCode($verifyUrl, QR_ERROR_CORRECT_LEVEL_L);
+// Convert hex colors to RGB arrays for FPDF
+function hexToRgbArr($hex) {
+    $hex = ltrim($hex, '#');
+    return [
+        hexdec(substr($hex, 0, 2)),
+        hexdec(substr($hex, 2, 2)),
+        hexdec(substr($hex, 4, 2)),
+    ];
+}
+[$pr, $pg, $pb] = hexToRgbArr($primaryHex);   // primary color RGB
+[$sr, $sg, $sb] = hexToRgbArr($secondaryHex); // secondary color RGB
+
+// ---- BUILD VERIFICATION URL ----
+$baseUrl     = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? 'https://' : 'http://') . $_SERVER['HTTP_HOST'];
+$projectPath = '/certverify';
+$verifyUrl   = $baseUrl . $projectPath . '/public_verify.php?hash=' . urlencode($cert['hashValue']);
+
+// ---- GENERATE QR CODE ----
+$qr          = QRCode::getMinimumQRCode($verifyUrl, QR_ERROR_CORRECT_LEVEL_L);
 $moduleCount = $qr->getModuleCount();
 
-// ---- CUSTOM PDF CLASS WITH BORDER/WATERMARK STYLING ----
+// ---- PDF CLASS ----
 class CertificatePDF extends FPDF {
     function Header() {}
     function Footer() {}
 }
 
-$pdf = new CertificatePDF('L', 'mm', 'A4'); // Landscape A4
+$pdf = new CertificatePDF('L', 'mm', 'A4');
 $pdf->AddPage();
 $pdf->SetAutoPageBreak(false);
 
 $pageW = 297;
 $pageH = 210;
 
-// ---- OUTER DECORATIVE BORDER ----
-$pdf->SetLineWidth(1.2);
-$pdf->SetDrawColor(26, 58, 108); // primary navy
+// ---- OUTER BORDER (primary color) ----
+$pdf->SetLineWidth(1.5);
+$pdf->SetDrawColor($pr, $pg, $pb);
 $pdf->Rect(8, 8, $pageW - 16, $pageH - 16);
 
-$pdf->SetLineWidth(0.4);
-$pdf->SetDrawColor(232, 160, 32); // accent gold
+// ---- INNER BORDER (secondary color) ----
+$pdf->SetLineWidth(0.5);
+$pdf->SetDrawColor($sr, $sg, $sb);
 $pdf->Rect(12, 12, $pageW - 24, $pageH - 24);
 
-// ---- HEADER: INSTITUTION NAME ----
-$pdf->SetFont('Times', 'B', 24);
-$pdf->SetTextColor(26, 58, 108);
-$pdf->SetY(22);
-$pdf->Cell(0, 10, 'CAVENDISH UNIVERSITY ZAMBIA', 0, 1, 'C');
+// ---- HEADER BACKGROUND BAR (primary color) ----
+$pdf->SetFillColor($pr, $pg, $pb);
+$pdf->Rect(8, 8, $pageW - 16, 38, 'F');
 
-$pdf->SetFont('Times', '', 12);
-$pdf->SetTextColor(100, 100, 100);
-$pdf->Cell(0, 7, 'Faculty of Business and Information Technology', 0, 1, 'C');
+// ---- LOGO (if uploaded) ----
+$logoAbsPath = '';
+if (!empty($logoPath)) {
+    $logoAbsPath = dirname(__DIR__) . '/' . $logoPath;
+}
 
-// ---- DIVIDER ----
-$pdf->SetDrawColor(232, 160, 32);
-$pdf->SetLineWidth(0.6);
-$pdf->Line(110, 42, 187, 42);
+$logoY      = 10;
+$logoH      = 28; // max logo height in mm
+$logoX      = 16;
+$headerTextX = 16; // default text start X
 
-// ---- TITLE ----
-$pdf->SetY(48);
+if (!empty($logoAbsPath) && file_exists($logoAbsPath)) {
+    // Get image dimensions to scale proportionally
+    $imgInfo  = getimagesize($logoAbsPath);
+    $imgW_px  = $imgInfo[0];
+    $imgH_px  = $imgInfo[1];
+    $imgType  = strtolower(pathinfo($logoAbsPath, PATHINFO_EXTENSION));
+
+    // Only raster images work directly with FPDF Image()
+    // SVGs require conversion — skip and show name only
+    if (in_array($imgType, ['png', 'jpg', 'jpeg', 'gif'])) {
+        // Scale to fit within logoH mm height
+        $scaledW = ($imgW_px / $imgH_px) * $logoH;
+        $scaledW = min($scaledW, 50); // cap width at 50mm
+
+        $pdf->Image($logoAbsPath, $logoX, $logoY, $scaledW, $logoH);
+        $headerTextX = $logoX + $scaledW + 4;
+    }
+}
+
+// ---- INSTITUTION NAME in header ----
+// Calculate text color — use white if primary is dark, dark if light
+$luminance = (0.299 * $pr + 0.587 * $pg + 0.114 * $pb) / 255;
+$textR = $textG = $textB = ($luminance > 0.5) ? 30 : 255; // dark on light, white on dark
+
+$pdf->SetFont('Times', 'B', 18);
+$pdf->SetTextColor($textR, $textG, $textB);
+$pdf->SetXY($headerTextX, 14);
+$pdf->Cell($pageW - $headerTextX - 16, 10, $institutionName, 0, 1, empty($logoAbsPath) || !file_exists($logoAbsPath) ? 'C' : 'L');
+
+$pdf->SetFont('Times', '', 10);
+$pdf->SetTextColor($textR, $textG, $textB);
+$pdf->SetXY($headerTextX, 26);
+$pdf->Cell($pageW - $headerTextX - 16, 6, 'Faculty of Business and Information Technology', 0, 1,
+    empty($logoAbsPath) || !file_exists($logoAbsPath) ? 'C' : 'L');
+
+// ---- SECONDARY COLOR DIVIDER LINE ----
+$pdf->SetDrawColor($sr, $sg, $sb);
+$pdf->SetLineWidth(0.8);
+$pdf->Line(110, 50, 187, 50);
+
+// ---- CERTIFICATE TITLE ----
+$pdf->SetY(53);
 $pdf->SetFont('Times', 'B', 20);
-$pdf->SetTextColor(26, 58, 108);
-$pdf->Cell(0, 12, 'CERTIFICATE OF COMPLETION', 0, 1, 'C');
+$pdf->SetTextColor($pr, $pg, $pb);
+$pdf->Cell(0, 10, 'CERTIFICATE OF COMPLETION', 0, 1, 'C');
 
 // ---- "This is to certify that" ----
-$pdf->SetY(64);
+$pdf->SetY(66);
 $pdf->SetFont('Times', 'I', 13);
-$pdf->SetTextColor(60, 60, 60);
-$pdf->Cell(0, 8, 'This is to certify that', 0, 1, 'C');
+$pdf->SetTextColor(70, 70, 70);
+$pdf->Cell(0, 7, 'This is to certify that', 0, 1, 'C');
 
 // ---- STUDENT NAME ----
-$pdf->SetY(74);
+$pdf->SetY(75);
 $pdf->SetFont('Times', 'B', 26);
 $pdf->SetTextColor(15, 15, 15);
-$pdf->Cell(0, 14, strtoupper($cert['studentName']), 0, 1, 'C');
+$pdf->Cell(0, 13, strtoupper($cert['studentName']), 0, 1, 'C');
 
-// underline beneath name
+// Underline in primary color
 $nameWidth = $pdf->GetStringWidth(strtoupper($cert['studentName'])) + 10;
-$centerX = $pageW / 2;
-$pdf->SetDrawColor(26, 58, 108);
-$pdf->SetLineWidth(0.3);
-$pdf->Line($centerX - $nameWidth/2, 90, $centerX + $nameWidth/2, 90);
+$centerX   = $pageW / 2;
+$pdf->SetDrawColor($pr, $pg, $pb);
+$pdf->SetLineWidth(0.4);
+$pdf->Line($centerX - $nameWidth / 2, 89, $centerX + $nameWidth / 2, 89);
 
 // ---- "has successfully completed" ----
-$pdf->SetY(94);
-$pdf->SetFont('Times', '', 13);
-$pdf->SetTextColor(60, 60, 60);
-$pdf->Cell(0, 8, 'has successfully completed the program of study in', 0, 1, 'C');
+$pdf->SetY(92);
+$pdf->SetFont('Times', '', 12);
+$pdf->SetTextColor(80, 80, 80);
+$pdf->Cell(0, 7, 'has successfully completed the program of study in', 0, 1, 'C');
 
-// ---- PROGRAM NAME ----
-$pdf->SetY(104);
-$pdf->SetFont('Times', 'B', 18);
-$pdf->SetTextColor(26, 58, 108);
+// ---- PROGRAM NAME (primary color) ----
+$pdf->SetY(101);
+$pdf->SetFont('Times', 'B', 17);
+$pdf->SetTextColor($pr, $pg, $pb);
 $pdf->MultiCell(0, 9, $cert['program'], 0, 'C');
 
-// ---- DATE & STUDENT ID ----
-$pdf->SetY(126);
+// ---- STUDENT ID & DATE ----
+$pdf->SetY(122);
 $pdf->SetFont('Times', '', 11);
-$pdf->SetTextColor(60, 60, 60);
+$pdf->SetTextColor(80, 80, 80);
 $pdf->Cell(0, 6, 'Student ID: ' . $cert['studentID'] . '   |   Date Issued: ' . date('d F Y', strtotime($cert['dateIssued'])), 0, 1, 'C');
 
 // ---- STATUS BADGE ----
-$statusText = ($cert['status'] === 'valid') ? 'VALID CERTIFICATE' : 'REVOKED CERTIFICATE';
-$statusColor = ($cert['status'] === 'valid') ? [24, 160, 90] : [214, 48, 49];
-$pdf->SetY(134);
+$statusText  = ($cert['status'] === 'valid') ? 'VALID CERTIFICATE' : 'REVOKED CERTIFICATE';
+$statusRgb   = ($cert['status'] === 'valid') ? [24, 160, 90] : [214, 48, 49];
+$pdf->SetY(130);
 $pdf->SetFont('Times', 'B', 10);
-$pdf->SetTextColor($statusColor[0], $statusColor[1], $statusColor[2]);
-$pdf->Cell(0, 6, $statusText, 0, 1, 'C');
+$pdf->SetTextColor($statusRgb[0], $statusRgb[1], $statusRgb[2]);
+$pdf->Cell(0, 5, $statusText, 0, 1, 'C');
 
-// ---- SIGNATURE LINE (left) ----
-$pdf->SetDrawColor(80, 80, 80);
+// ---- SECONDARY COLOR FOOTER BAR ----
+$pdf->SetFillColor($sr, $sg, $sb);
+$pdf->Rect(8, $pageH - 16, $pageW - 16, 6, 'F');
+
+// ---- SIGNATURE: INSTITUTION ----
+$pdf->SetDrawColor(120, 120, 120);
 $pdf->SetLineWidth(0.3);
-$pdf->Line(30, 175, 95, 175);
+$pdf->Line(28, 170, 100, 170);
 $pdf->SetFont('Times', '', 10);
 $pdf->SetTextColor(60, 60, 60);
-$pdf->SetXY(30, 177);
-$pdf->Cell(65, 5, 'Authorized Signatory', 0, 0, 'C');
-$pdf->SetXY(30, 182);
+$pdf->SetXY(28, 172);
+$pdf->Cell(72, 5, 'Authorized Signatory', 0, 0, 'C');
+$pdf->SetXY(28, 178);
 $pdf->SetFont('Times', 'I', 9);
-$pdf->Cell(65, 5, $cert['issuedByName'], 0, 0, 'C');
+$pdf->SetTextColor($pr, $pg, $pb);
+$pdf->Cell(72, 5, $cert['institutionName'], 0, 0, 'C');
 
-// ---- ISSUE DATE (center-left) ----
-$pdf->Line(130, 175, 195, 175);
+// ---- DATE ----
+$pdf->SetDrawColor(120, 120, 120);
+$pdf->Line(128, 170, 200, 170);
 $pdf->SetFont('Times', '', 10);
-$pdf->SetXY(130, 177);
-$pdf->Cell(65, 5, 'Date of Issue', 0, 0, 'C');
-$pdf->SetXY(130, 182);
+$pdf->SetTextColor(60, 60, 60);
+$pdf->SetXY(128, 172);
+$pdf->Cell(72, 5, 'Date of Issue', 0, 0, 'C');
+$pdf->SetXY(128, 178);
 $pdf->SetFont('Times', 'I', 9);
-$pdf->Cell(65, 5, date('d F Y', strtotime($cert['dateIssued'])), 0, 0, 'C');
+$pdf->Cell(72, 5, date('d F Y', strtotime($cert['dateIssued'])), 0, 0, 'C');
 
-// ---- QR CODE (bottom right) ----
-$qrX = 235;       // mm position from left
-$qrY = 150;       // mm position from top
-$qrSize = 32;     // total QR size in mm
+// ---- QR CODE ----
+$qrX        = 238;
+$qrY        = 142;
+$qrSize     = 34;
 $moduleSize = $qrSize / $moduleCount;
 
 $pdf->SetFillColor(0, 0, 0);
 for ($row = 0; $row < $moduleCount; $row++) {
     for ($col = 0; $col < $moduleCount; $col++) {
         if ($qr->isDark($row, $col)) {
-            $x = $qrX + ($col * $moduleSize);
-            $y = $qrY + ($row * $moduleSize);
-            $pdf->Rect($x, $y, $moduleSize, $moduleSize, 'F');
+            $pdf->Rect($qrX + ($col * $moduleSize), $qrY + ($row * $moduleSize), $moduleSize, $moduleSize, 'F');
         }
     }
 }
-
 $pdf->SetFont('Times', '', 7);
-$pdf->SetTextColor(100, 100, 100);
+$pdf->SetTextColor(120, 120, 120);
 $pdf->SetXY($qrX - 4, $qrY + $qrSize + 1);
 $pdf->Cell($qrSize + 8, 4, 'Scan to Verify', 0, 0, 'C');
 
-// ---- HASH VALUE (footer, small) ----
-$pdf->SetFont('Courier', '', 7);
-$pdf->SetTextColor(140, 140, 140);
-$pdf->SetXY(20, 195);
-$pdf->Cell(0, 4, 'Certificate Hash (SHA-256): ' . $cert['hashValue'], 0, 0, 'L');
+// ---- HASH FOOTER ----
+$pdf->SetFont('Times', '', 6.5);
+$pdf->SetTextColor(160, 160, 160);
+$pdf->SetXY(18, 192);
+$pdf->Cell(0, 4, 'SHA-256: ' . $cert['hashValue'], 0, 0, 'L');
 
 // ---- OUTPUT ----
 $filename = 'Certificate_' . preg_replace('/[^A-Za-z0-9_-]/', '_', $cert['studentName']) . '.pdf';
-$pdf->Output('D', $filename); // 'D' forces download
+$pdf->Output('D', $filename);
 exit();
