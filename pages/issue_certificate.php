@@ -3,9 +3,12 @@
 require_once '../config/db.php';
 require_once '../includes/header.php';
 
-// Only admin and institution can access
-if ($userRole === 'employer') {
-    echo '<div class="alert-cv danger"><i class="fas fa-ban me-2"></i>You do not have permission to issue certificates.</div>';
+if ($userRole !== 'institution') {
+    echo '<div class="alert-cv danger">
+        <i class="fas fa-ban me-2"></i>
+        <strong>Access Denied.</strong> Only registered institutions can issue certificates.
+        ' . ($userRole === 'admin' ? ' Administrators manage the system but do not issue certificates.' : '') . '
+    </div>';
     require_once '../includes/footer.php';
     exit();
 }
@@ -14,6 +17,7 @@ $success = '';
 $error   = '';
 $generatedHash = '';
 $certData = [];
+$certID = null;
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $studentName = trim($_POST['studentName'] ?? '');
@@ -24,11 +28,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (empty($studentName) || empty($studentID) || empty($program) || empty($dateIssued)) {
         $error = 'All fields are required.';
     } else {
-        // Generate SHA-256 hash from certificate data + timestamp for uniqueness
         $dataToHash = $studentName . '|' . $studentID . '|' . $program . '|' . $dateIssued . '|' . time();
         $hashValue  = hash('sha256', $dataToHash);
 
-        // Check if studentID already has a certificate for this program
         $check = $conn->prepare("SELECT certificateID FROM certificates WHERE studentID = ? AND program = ?");
         $check->bind_param("ss", $studentID, $program);
         $check->execute();
@@ -40,7 +42,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             if ($stmt->execute()) {
                 $certID = $conn->insert_id;
-                // Log transaction
                 $log = $conn->prepare("INSERT INTO transactions (certificateID, verifiedBy, transactionType, ipAddress) VALUES (?, ?, 'issued', ?)");
                 $ip = $_SERVER['REMOTE_ADDR'];
                 $log->bind_param("iis", $certID, $_SESSION['user_id'], $ip);
@@ -49,6 +50,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $success = 'Certificate issued successfully!';
                 $generatedHash = $hashValue;
                 $certData = compact('studentName', 'studentID', 'program', 'dateIssued');
+                $certData['certificateID'] = $certID;
             } else {
                 $error = 'Failed to issue certificate. Please try again.';
             }
@@ -59,7 +61,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 <div class="page-header">
     <h2><i class="fas fa-plus-circle me-2" style="color:var(--accent);"></i>Issue New Certificate</h2>
-    <p>Fill in the student details below. A unique SHA-256 hash will be generated and stored securely.</p>
+    <p>Issuing as: <strong><?php echo htmlspecialchars($userName); ?></strong> &mdash; Fill in the student details below.</p>
 </div>
 
 <div class="row g-3">
@@ -119,15 +121,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <div class="cert-detail-row"><span class="label">Student ID</span><span class="value"><?php echo htmlspecialchars($certData['studentID']); ?></span></div>
                 <div class="cert-detail-row"><span class="label">Program</span><span class="value"><?php echo htmlspecialchars($certData['program']); ?></span></div>
                 <div class="cert-detail-row"><span class="label">Date Issued</span><span class="value"><?php echo date('d M Y', strtotime($certData['dateIssued'])); ?></span></div>
+                <div class="cert-detail-row"><span class="label">Issued By</span><span class="value"><?php echo htmlspecialchars($userName); ?></span></div>
             </div>
 
-            <label class="form-label">Generated SHA-256 Hash (Certificate Fingerprint)</label>
+            <label class="form-label">Generated SHA-256 Hash</label>
             <div class="hash-display mb-3"><?php echo htmlspecialchars($generatedHash); ?></div>
 
             <button onclick="copyHash('<?php echo $generatedHash; ?>')" class="btn-accent w-100 mb-2">
                 <i class="fas fa-copy me-2"></i>Copy Hash
             </button>
-            <a href="issue_certificate.php" class="btn-primary-cv w-100" style="display:block;text-align:center;">
+
+            <!-- View in browser -->
+            <a href="../actions/generate_certificate_pdf.php?id=<?php echo $certData['certificateID']; ?>&view=1"
+               target="_blank"
+               class="btn-primary-cv w-100 mb-2"
+               style="display:block;text-align:center;">
+                <i class="fas fa-eye me-2"></i>View Certificate (opens in browser)
+            </a>
+
+            <!-- Force download -->
+            <a href="../actions/generate_certificate_pdf.php?id=<?php echo $certData['certificateID']; ?>"
+               target="_blank"
+               class="btn-primary-cv w-100 mb-2"
+               style="display:block;text-align:center;background:var(--success);">
+                <i class="fas fa-download me-2"></i>Download Certificate PDF
+            </a>
+
+            <a href="issue_certificate.php"
+               class="btn-primary-cv w-100"
+               style="display:block;text-align:center;background:var(--light-bg);color:var(--primary);border:1px solid var(--border);">
                 <i class="fas fa-plus me-2"></i>Issue Another Certificate
             </a>
         </div>
@@ -139,8 +161,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <p style="font-size:0.88rem;line-height:1.7;">
                     When you submit the form, the system generates a unique <strong>SHA-256 cryptographic hash</strong>
                     from the certificate data. This hash acts as a tamper-proof digital fingerprint stored securely
-                    in the database. Any future attempt to verify the certificate will compare hashes — if they match,
-                    the certificate is authentic.
+                    in the database. You can then view the certificate in your browser or download it as a PDF.
                 </p>
             </div>
         </div>

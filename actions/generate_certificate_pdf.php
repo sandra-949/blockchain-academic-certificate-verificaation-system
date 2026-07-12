@@ -101,51 +101,50 @@ $pdf->Rect(12, 12, $pageW - 24, $pageH - 24);
 $pdf->SetFillColor($pr, $pg, $pb);
 $pdf->Rect(8, 8, $pageW - 16, 38, 'F');
 
-// ---- LOGO (if uploaded) ----
+// ---- LOGO + INSTITUTION NAME — centered layout ----
 $logoAbsPath = '';
 if (!empty($logoPath)) {
     $logoAbsPath = dirname(__DIR__) . '/' . $logoPath;
 }
 
-$logoY      = 10;
-$logoH      = 28; // max logo height in mm
-$logoX      = 16;
-$headerTextX = 16; // default text start X
+$luminance = (0.299 * $pr + 0.587 * $pg + 0.114 * $pb) / 255;
+$textR = $textG = $textB = ($luminance > 0.5) ? 30 : 255;
 
+$hasLogo = false;
 if (!empty($logoAbsPath) && file_exists($logoAbsPath)) {
-    // Get image dimensions to scale proportionally
-    $imgInfo  = getimagesize($logoAbsPath);
-    $imgW_px  = $imgInfo[0];
-    $imgH_px  = $imgInfo[1];
-    $imgType  = strtolower(pathinfo($logoAbsPath, PATHINFO_EXTENSION));
+    $imgInfo = getimagesize($logoAbsPath);
+    $imgType = strtolower(pathinfo($logoAbsPath, PATHINFO_EXTENSION));
+    if (in_array($imgType, ['png', 'jpg', 'jpeg', 'gif']) && $imgInfo) {
+        $logoH   = 20;
+        $scaledW = min(($imgInfo[0] / $imgInfo[1]) * $logoH, 40);
 
-    // Only raster images work directly with FPDF Image()
-    // SVGs require conversion — skip and show name only
-    if (in_array($imgType, ['png', 'jpg', 'jpeg', 'gif'])) {
-        // Scale to fit within logoH mm height
-        $scaledW = ($imgW_px / $imgH_px) * $logoH;
-        $scaledW = min($scaledW, 50); // cap width at 50mm
+        // Center logo horizontally
+        $logoX = ($pageW - $scaledW) / 2;
+        $pdf->Image($logoAbsPath, $logoX, 10, $scaledW, $logoH);
+        $hasLogo = true;
 
-        $pdf->Image($logoAbsPath, $logoX, $logoY, $scaledW, $logoH);
-        $headerTextX = $logoX + $scaledW + 4;
+        // Institution name centered below logo
+        $pdf->SetFont('Times', 'B', 16);
+        $pdf->SetTextColor($textR, $textG, $textB);
+        $pdf->SetXY(16, 31);
+        $pdf->Cell($pageW - 32, 6, $institutionName, 0, 1, 'C');
+
+        $pdf->SetFont('Times', '', 9);
+        $pdf->SetXY(16, 38);
+        $pdf->Cell($pageW - 32, 4, 'Faculty of Business and Information Technology', 0, 1, 'C');
     }
 }
 
-// ---- INSTITUTION NAME in header ----
-// Calculate text color — use white if primary is dark, dark if light
-$luminance = (0.299 * $pr + 0.587 * $pg + 0.114 * $pb) / 255;
-$textR = $textG = $textB = ($luminance > 0.5) ? 30 : 255; // dark on light, white on dark
+if (!$hasLogo) {
+    $pdf->SetFont('Times', 'B', 18);
+    $pdf->SetTextColor($textR, $textG, $textB);
+    $pdf->SetXY(16, 14);
+    $pdf->Cell($pageW - 32, 10, $institutionName, 0, 1, 'C');
 
-$pdf->SetFont('Times', 'B', 18);
-$pdf->SetTextColor($textR, $textG, $textB);
-$pdf->SetXY($headerTextX, 14);
-$pdf->Cell($pageW - $headerTextX - 16, 10, $institutionName, 0, 1, empty($logoAbsPath) || !file_exists($logoAbsPath) ? 'C' : 'L');
-
-$pdf->SetFont('Times', '', 10);
-$pdf->SetTextColor($textR, $textG, $textB);
-$pdf->SetXY($headerTextX, 26);
-$pdf->Cell($pageW - $headerTextX - 16, 6, 'Faculty of Business and Information Technology', 0, 1,
-    empty($logoAbsPath) || !file_exists($logoAbsPath) ? 'C' : 'L');
+    $pdf->SetFont('Times', '', 10);
+    $pdf->SetXY(16, 26);
+    $pdf->Cell($pageW - 32, 6, 'Faculty of Business and Information Technology', 0, 1, 'C');
+}
 
 // ---- SECONDARY COLOR DIVIDER LINE ----
 $pdf->SetDrawColor($sr, $sg, $sb);
