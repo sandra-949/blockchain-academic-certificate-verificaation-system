@@ -25,7 +25,7 @@ $nodes = [
 
 // ── Connect to all three nodes ────────────────────────────
 $connections = [];
-$nodeStatus  = [];
+$nodeStatus = [];
 
 foreach ($nodes as $nodeNum => $dbName) {
     $c = new mysqli(DB_HOST, DB_USER, DB_PASS, $dbName);
@@ -35,7 +35,7 @@ foreach ($nodes as $nodeNum => $dbName) {
     } else {
         $c->set_charset("utf8");
         $connections[$nodeNum] = $c;
-        $nodeStatus[$nodeNum]  = 'online';
+        $nodeStatus[$nodeNum] = 'online';
     }
 }
 
@@ -51,9 +51,11 @@ define('MIN_CONSENSUS_NODES', 2); // at least 2 of 3 must agree
  * Get the latest block hash from a node (for chaining).
  * Returns the genesis hash if no blocks exist yet.
  */
-function getLastBlockHash($conn) {
+function getLastBlockHash($conn)
+{
     $genesis = '0000000000000000000000000000000000000000000000000000000000000000';
-    if (!$conn) return $genesis;
+    if (!$conn)
+        return $genesis;
     $result = $conn->query("SELECT blockHash FROM certificates ORDER BY blockIndex DESC LIMIT 1");
     if ($result && $result->num_rows > 0) {
         return $result->fetch_assoc()['blockHash'];
@@ -64,12 +66,14 @@ function getLastBlockHash($conn) {
 /**
  * Get the next block index from a node.
  */
-function getNextBlockIndex($conn) {
-    if (!$conn) return 0;
+function getNextBlockIndex($conn)
+{
+    if (!$conn)
+        return 0;
     $result = $conn->query("SELECT MAX(blockIndex) as maxIdx FROM certificates");
     if ($result && $result->num_rows > 0) {
         $row = $result->fetch_assoc();
-        return ($row['maxIdx'] === null) ? 0 : (int)$row['maxIdx'] + 1;
+        return ($row['maxIdx'] === null) ? 0 : (int) $row['maxIdx'] + 1;
     }
     return 0;
 }
@@ -79,7 +83,8 @@ function getNextBlockIndex($conn) {
  * This is what links each record to the one before it,
  * making tampering detectable (same as blockchain block hashing).
  */
-function computeBlockHash($studentName, $studentID, $program, $dateIssued, $certHash, $previousHash, $blockIndex) {
+function computeBlockHash($studentName, $studentID, $program, $dateIssued, $certHash, $previousHash, $blockIndex)
+{
     $data = implode('|', [$blockIndex, $previousHash, $studentName, $studentID, $program, $dateIssued, $certHash]);
     return hash('sha256', $data);
 }
@@ -88,33 +93,29 @@ function computeBlockHash($studentName, $studentID, $program, $dateIssued, $cert
  * Write a certificate to ALL online nodes simultaneously.
  * Returns array: ['success' => bool, 'nodes_written' => int, 'block_index' => int]
  */
-function writeToAllNodes($connections, $studentName, $studentID, $program, $dateIssued, $hashValue, $issuedBy) {
+function writeToAllNodes($connections, $studentName, $studentID, $program, $dateIssued, $hashValue, $issuedBy)
+{
     global $nodeStatus;
 
     $nodesWritten = 0;
-    $blockIndex   = null;
+    $blockIndex = null;
 
     foreach ($connections as $nodeNum => $conn) {
-        if (!$conn) continue;
+        if (!$conn)
+            continue;
 
         // Get chain state for this node
-        $prevHash   = getLastBlockHash($conn);
-        $thisIndex  = getNextBlockIndex($conn);
-        $blockHash  = computeBlockHash($studentName, $studentID, $program, $dateIssued, $hashValue, $prevHash, $thisIndex);
+        $prevHash = getLastBlockHash($conn);
+        $thisIndex = getNextBlockIndex($conn);
+        $blockHash = computeBlockHash($studentName, $studentID, $program, $dateIssued, $hashValue, $prevHash, $thisIndex);
 
-        if ($blockIndex === null) $blockIndex = $thisIndex;
+        if ($blockIndex === null)
+            $blockIndex = $thisIndex;
 
-        $stmt = $conn->prepare("
-            INSERT INTO certificates
-                (studentName, studentID, program, dateIssued, hashValue, issuedBy, blockIndex, previousHash, blockHash)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ");
-        $stmt->bind_param("sssssiiiss",
-            $studentName, $studentID, $program, $dateIssued,
-            $hashValue, $issuedBy, $thisIndex, $prevHash, $blockHash
-        );
-
-        // Fix: correct bind_param types
+        // 9 params: s s s s s i i s s
+        // studentName, studentID, program, dateIssued, hashValue = strings (5s)
+        // issuedBy, blockIndex = integers (2i)
+        // previousHash, blockHash = strings (2s)
         $stmt = $conn->prepare("
             INSERT INTO certificates
                 (studentName, studentID, program, dateIssued, hashValue, issuedBy, blockIndex, previousHash, blockHash)
@@ -122,8 +123,15 @@ function writeToAllNodes($connections, $studentName, $studentID, $program, $date
         ");
         $stmt->bind_param(
             "sssssiiss",
-            $studentName, $studentID, $program, $dateIssued,
-            $hashValue, $issuedBy, $thisIndex, $prevHash, $blockHash
+            $studentName,
+            $studentID,
+            $program,
+            $dateIssued,
+            $hashValue,
+            $issuedBy,
+            $thisIndex,
+            $prevHash,
+            $blockHash
         );
 
         if ($stmt->execute()) {
@@ -141,9 +149,9 @@ function writeToAllNodes($connections, $studentName, $studentID, $program, $date
     }
 
     return [
-        'success'      => $nodesWritten >= MIN_CONSENSUS_NODES,
-        'nodes_written'=> $nodesWritten,
-        'block_index'  => $blockIndex,
+        'success' => $nodesWritten >= MIN_CONSENSUS_NODES,
+        'nodes_written' => $nodesWritten,
+        'block_index' => $blockIndex,
     ];
 }
 
@@ -151,8 +159,9 @@ function writeToAllNodes($connections, $studentName, $studentID, $program, $date
  * Verify a certificate across ALL nodes (consensus check).
  * Returns detailed result including which nodes agreed/disagreed.
  */
-function verifyAcrossNodes($connections, $hashValue) {
-    $results    = [];
+function verifyAcrossNodes($connections, $hashValue)
+{
+    $results = [];
     $onlineCount = 0;
 
     foreach ($connections as $nodeNum => $conn) {
@@ -190,7 +199,7 @@ function verifyAcrossNodes($connections, $hashValue) {
 
     // Consensus: majority of online nodes agree
     $consensusStatus = null;
-    $consensusCert   = null;
+    $consensusCert = null;
     foreach ($statusCounts as $status => $count) {
         if ($count >= MIN_CONSENSUS_NODES && $status !== 'node_offline') {
             $consensusStatus = $status;
@@ -211,25 +220,28 @@ function verifyAcrossNodes($connections, $hashValue) {
     $tamperingDetected = count($uniqueStatuses) > 1;
 
     return [
-        'node_results'       => $results,
-        'consensus_status'   => $consensusStatus,
-        'consensus_cert'     => $consensusCert,
+        'node_results' => $results,
+        'consensus_status' => $consensusStatus,
+        'consensus_cert' => $consensusCert,
         'tampering_detected' => $tamperingDetected,
-        'online_nodes'       => $onlineCount,
-        'status_counts'      => $statusCounts,
+        'online_nodes' => $onlineCount,
+        'status_counts' => $statusCounts,
     ];
 }
 
 /**
  * Revoke/restore a certificate across all nodes.
  */
-function updateStatusAllNodes($connections, $hashValue, $newStatus, $adminID) {
+function updateStatusAllNodes($connections, $hashValue, $newStatus, $adminID)
+{
     $updated = 0;
     foreach ($connections as $nodeNum => $conn) {
-        if (!$conn) continue;
+        if (!$conn)
+            continue;
         $stmt = $conn->prepare("UPDATE certificates SET status = ? WHERE hashValue = ?");
         $stmt->bind_param("ss", $newStatus, $hashValue);
-        if ($stmt->execute()) $updated++;
+        if ($stmt->execute())
+            $updated++;
 
         // Log it
         $certStmt = $conn->prepare("SELECT certificateID FROM certificates WHERE hashValue = ?");
@@ -249,4 +261,70 @@ function updateStatusAllNodes($connections, $hashValue, $newStatus, $adminID) {
         }
     }
     return $updated;
+}
+/**
+ * Sync a user to all nodes - INSERT
+ */
+function syncUserToAllNodes($connections, $fullName, $email, $passwordHash, $role)
+{
+    global $MIN_CONSENSUS_NODES;
+
+    $nodesWritten = 0;
+    $insertedID = null;
+    $errors = [];
+
+    foreach ($connections as $nodeNum => $conn) {
+        if (!$conn)
+            continue;
+
+        $stmt = $conn->prepare("INSERT INTO users (fullName, email, passwordHash, role) VALUES (?, ?, ?, ?)");
+        $stmt->bind_param("ssss", $fullName, $email, $passwordHash, $role);
+
+        if ($stmt->execute()) {
+            $nodesWritten++;
+            if ($insertedID === null) {
+                $insertedID = $conn->insert_id;
+            }
+        } else {
+            $errors[] = "Node $nodeNum: " . $conn->error;
+        }
+    }
+
+    return [
+        'success' => $nodesWritten >= MIN_CONSENSUS_NODES,
+        'nodes_written' => $nodesWritten,
+        'userID' => $insertedID,
+        'errors' => $errors
+    ];
+}
+
+/**
+ * Sync user status to all nodes - UPDATE
+ */
+function syncUserStatusAllNodes($connections, $userID, $newStatus)
+{
+    global $MIN_CONSENSUS_NODES;
+
+    $nodesUpdated = 0;
+    $errors = [];
+
+    foreach ($connections as $nodeNum => $conn) {
+        if (!$conn)
+            continue;
+
+        $stmt = $conn->prepare("UPDATE users SET status = ? WHERE userID = ?");
+        $stmt->bind_param("si", $newStatus, $userID);
+
+        if ($stmt->execute()) {
+            $nodesUpdated++;
+        } else {
+            $errors[] = "Node $nodeNum: " . $conn->error;
+        }
+    }
+
+    return [
+        'success' => $nodesUpdated >= MIN_CONSENSUS_NODES,
+        'nodes_updated' => $nodesUpdated,
+        'errors' => $errors
+    ];
 }

@@ -12,7 +12,7 @@ if ($userRole !== 'admin') {
 $success = '';
 $error = '';
 
-// Add user
+/// Add user - Sync to ALL nodes
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'add') {
     $fullName = trim($_POST['fullName'] ?? '');
     $email = trim($_POST['email'] ?? '');
@@ -25,27 +25,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $error = 'Password must be at least 6 characters.';
     } else {
         $hash = password_hash($password, PASSWORD_BCRYPT);
-        $stmt = $conn->prepare("INSERT INTO users (fullName, email, passwordHash, role) VALUES (?, ?, ?, ?)");
-        $stmt->bind_param("ssss", $fullName, $email, $hash, $role);
-        if ($stmt->execute()) {
-            $success = "User '$fullName' added successfully.";
+
+        $result = syncUserToAllNodes($connections, $fullName, $email, $hash, $role);
+
+        if ($result['success']) {
+            $success = "User '$fullName' added successfully to {$result['nodes_written']} nodes.";
         } else {
-            $error = 'Email already exists or failed to add user.';
+            $error = "Failed to add user to enough nodes. Only {$result['nodes_written']} nodes succeeded.";
         }
     }
 }
 
-// Toggle user status
+// Toggle user status - Sync to ALL nodes
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'toggle') {
     $uid = intval($_POST['userID']);
     $newStatus = $_POST['newStatus'];
-    if ($uid !== intval($_SESSION['user_id'])) { // Can't deactivate yourself
-        $conn->query("UPDATE users SET status='$newStatus' WHERE userID=$uid");
+
+    if ($uid !== intval($_SESSION['user_id'])) {
+        $result = syncUserStatusAllNodes($connections, $uid, $newStatus);
+        if (!$result['success']) {
+            $_SESSION['warning'] = "User status updated on only {$result['nodes_updated']} nodes.";
+        }
     }
     header("Location: users.php");
     exit();
 }
-
 $users = $conn->query("SELECT * FROM users ORDER BY dateCreated DESC");
 ?>
 
