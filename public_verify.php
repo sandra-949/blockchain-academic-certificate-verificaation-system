@@ -59,7 +59,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <div class="container">
         <div style="display:inline-flex;align-items:center;gap:12px;background:rgba(255,255,255,0.12);padding:0.5rem 1.2rem;border-radius:50px;margin-bottom:1rem;font-size:0.88rem;">
             <i class="fas fa-shield-halved" style="color:var(--accent);"></i>
-            Certverify
+            Cavendish University Zambia
         </div>
         <h1><i class="fas fa-certificate me-2" style="color:var(--accent);"></i>Certificate Verification</h1>
         <p>Enter the certificate hash to instantly verify its authenticity</p>
