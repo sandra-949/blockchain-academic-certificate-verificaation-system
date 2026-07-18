@@ -6,6 +6,7 @@
  * - The issuing institution's name (dynamic, from users table)
  * - The institution's uploaded logo (if any)
  * - The institution's primary and secondary color preferences
+ * - Verification code displayed below QR code
  */
 
 require_once '../config/db.php';
@@ -52,6 +53,7 @@ $institutionName = strtoupper($cert['institutionName']);
 $logoPath        = $cert['logoPath'] ?? '';
 $primaryHex      = $cert['primaryColor']   ?: '#1a3a6c';
 $secondaryHex    = $cert['secondaryColor'] ?: '#e8a020';
+$verificationCode = $cert['verificationCode'] ?? '';
 
 // Convert hex colors to RGB arrays for FPDF
 function hexToRgbArr($hex) {
@@ -68,7 +70,7 @@ function hexToRgbArr($hex) {
 // ---- BUILD VERIFICATION URL ----
 $baseUrl     = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? 'https://' : 'http://') . $_SERVER['HTTP_HOST'];
 $projectPath = '/certverify';
-$verifyUrl   = $baseUrl . $projectPath . '/public_verify.php?hash=' . urlencode($cert['hashValue']);
+$verifyUrl   = $baseUrl . $projectPath . '/public_verify.php?code=' . urlencode($verificationCode);
 
 // ---- GENERATE QR CODE ----
 $qr          = QRCode::getMinimumQRCode($verifyUrl, QR_ERROR_CORRECT_LEVEL_L);
@@ -230,12 +232,13 @@ $pdf->SetXY(128, 178);
 $pdf->SetFont('Times', 'I', 9);
 $pdf->Cell(72, 5, date('d F Y', strtotime($cert['dateIssued'])), 0, 0, 'C');
 
-// ---- QR CODE ----
+// ---- QR CODE + VERIFICATION CODE (NEW LAYOUT) ----
 $qrX        = 238;
 $qrY        = 142;
 $qrSize     = 34;
 $moduleSize = $qrSize / $moduleCount;
 
+// Draw QR code
 $pdf->SetFillColor(0, 0, 0);
 for ($row = 0; $row < $moduleCount; $row++) {
     for ($col = 0; $col < $moduleCount; $col++) {
@@ -244,10 +247,39 @@ for ($row = 0; $row < $moduleCount; $row++) {
         }
     }
 }
-$pdf->SetFont('Times', '', 7);
-$pdf->SetTextColor(120, 120, 120);
-$pdf->SetXY($qrX - 4, $qrY + $qrSize + 1);
-$pdf->Cell($qrSize + 8, 4, 'Scan to Verify', 0, 0, 'C');
+
+// ---- VERIFICATION CODE BELOW QR CODE ----
+if (!empty($verificationCode)) {
+    // Draw a light box around the verification code
+    $codeBoxWidth = 42;
+    $codeBoxX = $qrX - 4;
+    $codeBoxY = $qrY + $qrSize + 4;
+    $codeBoxH = 12;
+    
+    // Light background box
+    $pdf->SetFillColor(245, 248, 255);
+    $pdf->SetDrawColor($pr, $pg, $pb);
+    $pdf->SetLineWidth(0.3);
+    $pdf->Rect($codeBoxX, $codeBoxY, $codeBoxWidth, $codeBoxH, 'DF');
+    
+    // "VERIFY" label
+    $pdf->SetFont('Times', 'B', 6);
+    $pdf->SetTextColor(120, 120, 120);
+    $pdf->SetXY($codeBoxX + 2, $codeBoxY + 1);
+    $pdf->Cell($codeBoxWidth - 4, 3, 'VERIFY', 0, 1, 'C');
+    
+    // Verification code
+    $pdf->SetFont('Times', 'B', 8);
+    $pdf->SetTextColor($pr, $pg, $pb);
+    $pdf->SetXY($codeBoxX + 2, $codeBoxY + 4);
+    $pdf->Cell($codeBoxWidth - 4, 6, $verificationCode, 0, 1, 'C');
+    
+    // "Scan or enter code" small text
+    $pdf->SetFont('Times', 'I', 5.5);
+    $pdf->SetTextColor(160, 160, 160);
+    $pdf->SetXY($codeBoxX + 2, $codeBoxY + 9);
+    $pdf->Cell($codeBoxWidth - 4, 3, 'Scan or enter code', 0, 1, 'C');
+}
 
 // ---- HASH FOOTER ----
 $pdf->SetFont('Times', '', 6.5);
@@ -255,7 +287,16 @@ $pdf->SetTextColor(160, 160, 160);
 $pdf->SetXY(18, 192);
 $pdf->Cell(0, 4, 'SHA-256: ' . $cert['hashValue'], 0, 0, 'L');
 
+// ---- VERIFICATION CODE IN FOOTER (small reference) ----
+if (!empty($verificationCode)) {
+    $pdf->SetFont('Times', '', 6.5);
+    $pdf->SetTextColor(160, 160, 160);
+    $pdf->SetXY(18, 198);
+    $pdf->Cell(0, 4, 'Verification Code: ' . $verificationCode . '  |  Scan QR or visit ' . $baseUrl . $projectPath . '/public_verify.php', 0, 0, 'L');
+}
+
 // ---- OUTPUT ----
 $filename = 'Certificate_' . preg_replace('/[^A-Za-z0-9_-]/', '_', $cert['studentName']) . '.pdf';
 $pdf->Output('D', $filename);
 exit();
+?>
