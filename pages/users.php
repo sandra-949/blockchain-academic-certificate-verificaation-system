@@ -104,8 +104,9 @@ $users = $conn->query("SELECT * FROM users ORDER BY dateCreated DESC");
             <div class="card-header-cv">
                 <h5><i class="fas fa-list me-2"></i>All Users</h5>
             </div>
-            <div style="overflow-x:auto;">
-                <table class="table-cv">
+            
+    <div class="table-responsive-cv">
+    <table class="table-cv">
                     <thead>
                         <tr>
                             <th>Name</th>

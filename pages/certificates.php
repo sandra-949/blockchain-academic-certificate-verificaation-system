@@ -101,7 +101,8 @@ $certs = $conn->query("
         </div>
     </form>
 
-    <div style="overflow-x:auto;">
+    
+    <div class="table-responsive-cv">
     <table class="table-cv">
         <thead>
             <tr>

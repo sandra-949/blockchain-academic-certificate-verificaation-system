@@ -81,8 +81,9 @@ $recentTrans = $conn->query("
                 <h5><i class="fas fa-certificate me-2"></i>Recent Certificates</h5>
                 <a href="certificates.php" class="btn-accent" style="font-size:0.82rem;padding:0.4rem 0.9rem;border-radius:6px;">View All</a>
             </div>
-            <div style="overflow-x:auto;">
-            <table class="table-cv">
+           
+    <div class="table-responsive-cv">
+    <table class="table-cv">
                 <thead>
                     <tr>
                         <th>Student</th>
